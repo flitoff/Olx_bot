@@ -1,0 +1,88 @@
+import requests
+from bs4 import BeautifulSoup
+import telegram
+import time
+import threading
+from telegram.ext import Updater, CommandHandler
+
+# === Настройки ===
+SEARCH_QUERY = "fpv дрон"
+OLX_URL = f"https://www.olx.ua/d/uk/q-{SEARCH_QUERY.replace(' ', '-')}/"
+BOT_TOKEN = "ВАШ_ТОКЕН_БОТА"
+CHAT_ID = "ВАШ_CHAT_ID"
+
+bot = telegram.Bot(token=BOT_TOKEN)
+found_ads = set()
+
+def get_new_ads():
+    """Парсим OLX и ищем новые объявления"""
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(OLX_URL, headers=headers)
+
+    if response.status_code != 200:
+        print("Ошибка загрузки страницы OLX")
+        return []
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    ads = soup.find_all("div", class_="css-rc5s2u")  # Класс объявлений (может измениться!)
+
+    new_ads = []
+    for ad in ads:
+        title_tag = ad.find("h6")
+        link_tag = ad.find("a")
+        price_tag = ad.find("p", class_="css-10b0gli")
+
+        if title_tag and link_tag:
+            title = title_tag.text.strip()
+            link = "https://www.olx.ua" + link_tag["href"]
+            price = price_tag.text.strip() if price_tag else "Цена не указана"
+
+            if link not in found_ads:
+                found_ads.add(link)
+                new_ads.append((title, price, link))
+
+    return new_ads
+
+def send_telegram_message(ads):
+    """Отправляет новые объявления в Telegram"""
+    for title, price, link in ads:
+        message = f"🛸 Новое объявление!\n\n📌 {title}\n💰 {price}\n🔗 {link}"
+        bot.send_message(chat_id=CHAT_ID, text=message)
+
+def monitor_olx():
+    """Фоновая задача для мониторинга OLX"""
+    while True:
+        new_ads = get_new_ads()
+        if new_ads:
+            send_telegram_message(new_ads)
+            print(f"✅ Найдено {len(new_ads)} новых объявлений")
+        else:
+            print("🚀 Пока новых объявлений нет...")
+
+        time.sleep(600)  # Проверять каждые 10 минут
+
+# === Telegram-бот ===
+def start(update, context):
+    update.message.reply_text("🤖 Привет! Я мониторю FPV-дроны на OLX.")
+    threading.Thread(target=monitor_olx, daemon=True).start()
+
+def status(update, context):
+    update.message.reply_text("🚀 Бот работает и мониторит OLX.")
+
+def stop(update, context):
+    update.message.reply_text("⛔ Бот остановлен (но мониторинг в фоне).")
+
+def main():
+    updater = Updater(BOT_TOKEN, use_context=True)
+    dp = updater.dispatcher
+
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CommandHandler("status", status))
+    dp.add_handler(CommandHandler("stop", stop))
+
+    print("🤖 Бот запущен!")
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == "__main__":
+    main()
